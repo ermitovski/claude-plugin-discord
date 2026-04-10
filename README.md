@@ -12,11 +12,57 @@ Este repo es un **snapshot** — NO está conectado al upstream. Se usa para:
 
 ## Qué contiene
 
-El snapshot incluye tres bloques de cambios sobre el upstream:
+El snapshot incluye cuatro bloques de cambios sobre el upstream:
 
 1. **Plugin v0.0.4 base** — tal como se distribuye en `anthropics/claude-plugins-official` (la versión de `plugin.json` marca 0.0.4)
 2. **Patch del issue #1091** — fix de la corrupción de `recipientId` en DMs tras prompts de permiso. Detalles en <https://github.com/anthropics/claude-plugins-official/issues/1091>
 3. **Slash commands añadidos localmente** — soporte completo para registrar y servir slash commands de Discord vía un fichero `commands.json`. Añade imports `SlashCommandBuilder`, `REST`, `Routes`, `ApplicationCommandOptionType` y el bloque "Slash commands config" en `server.ts`
+4. **Tools extra** — `send_embed` (embeds ricos para informes) y `send_buttons` (botones clicables con espera bloqueante, para aprobaciones remotas de acciones destructivas). Ver sección [Tools añadidos](#tools-añadidos).
+
+## Tools añadidos
+
+Encima de los tools del upstream (`reply`, `react`, `edit_message`, `status_message`, `fetch_messages`, `download_attachment`, `interaction_respond`, `register_commands`) este fork añade:
+
+### `send_embed`
+
+Envía un embed Discord con título, descripción, color, fields, footer, thumbnail, imagen, autor y timestamp. Útil para informes estructurados (daily briefing, solar, finanzas, crypto) — se renderizan mucho mejor en móvil que los bullets en texto plano.
+
+```ts
+send_embed({
+  chat_id: "1467502243849834507",
+  title: "☀️ Solar — Hoy",
+  description: "Producción récord del mes",
+  color: "orange",
+  fields: [
+    { name: "Producción", value: "34.2 kWh", inline: true },
+    { name: "Consumo",    value: "18.5 kWh", inline: true },
+    { name: "Batería",    value: "92%",       inline: true },
+  ],
+  footer: "Huawei SUN2000-6KTL-L1",
+  timestamp: "now",
+})
+```
+
+### `send_buttons`
+
+Envía un mensaje con botones clicables y **bloquea** hasta que un usuario autorizado pulse uno (o hasta timeout). Pensado para aprobaciones remotas: en vez de pedir al usuario que escriba "sí/no", le mandas `[Approve] [Reject]` y espera el click desde el móvil. Al clickar, el mensaje se edita para mostrar quién pulsó qué y los botones se deshabilitan (auditoría en el historial del canal).
+
+```ts
+const r = await send_buttons({
+  chat_id: "1472689227660656794",
+  text: "🔄 Backup de Vaultwarden en d4800 — ¿proceder?",
+  buttons: [
+    { label: "Backup", value: "yes", style: "success", emoji: "✅" },
+    { label: "Cancel", value: "no",  style: "danger",  emoji: "❌" },
+  ],
+  timeout_s: 600, // 10 min
+})
+// r.clicked -> "yes" / "no"
+```
+
+- `timeout_s`: default 300 (5 min), max 840 (14 min, límite de Discord interactions).
+- `allowed_users`: por defecto la allowlist completa; pásalo para restringir (p. ej. sólo admin principal).
+- Máximo 25 botones (5 filas de 5). Estilos: `primary`/`secondary`/`success`/`danger`.
 
 ## Origen
 
