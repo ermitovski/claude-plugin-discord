@@ -35,9 +35,13 @@ import {
   type ChatInputCommandInteraction,
 } from 'discord.js'
 import { randomBytes } from 'crypto'
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync, statSync, renameSync, realpathSync, chmodSync, existsSync } from 'fs'
-import { homedir } from 'os'
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync, statSync, renameSync, realpathSync, chmodSync, existsSync, unlinkSync } from 'fs'
+import { homedir, tmpdir } from 'os'
 import { join, sep, dirname } from 'path'
+import { execFile } from 'child_process'
+import { promisify } from 'util'
+
+const execFileAsync = promisify(execFile)
 
 const STATE_DIR = process.env.DISCORD_STATE_DIR ?? join(homedir(), '.claude', 'channels', 'discord')
 const ACCESS_FILE = join(STATE_DIR, 'access.json')
@@ -633,6 +637,50 @@ async function downloadAttachment(att: Attachment): Promise<string> {
 // where delimiter chars let the attacker break out of the untrusted frame.
 function safeAttName(att: Attachment): string {
   return (att.name ?? att.id).replace(/[\[\]\r\n;]/g, '_')
+}
+
+// Audio attachments: Discord voice messages arrive as audio/ogg .ogg, but we
+// also accept the common audio types in case the user uploads a file by hand.
+const AUDIO_EXTS = new Set(['ogg', 'opus', 'm4a', 'mp3', 'wav', 'webm', 'flac', 'aac'])
+const TRANSCRIBE_SCRIPT = process.env.DISCORD_TRANSCRIBE_SCRIPT
+  ?? join(homedir(), 'xavi-brain', 'scripts', 'transcribe.sh')
+const TRANSCRIBE_TIMEOUT_MS = 60_000
+
+function isAudioAttachment(att: Attachment): boolean {
+  if (att.contentType?.startsWith('audio/')) return true
+  const name = att.name ?? ''
+  const ext = name.includes('.') ? name.slice(name.lastIndexOf('.') + 1).toLowerCase() : ''
+  return AUDIO_EXTS.has(ext)
+}
+
+// Pull the audio to /tmp, run the project's transcribe.sh with auto language
+// detection, return the transcript text. Returns null on any failure so the
+// caller falls back to the raw-attachment notification path.
+async function transcribeAudio(att: Attachment): Promise<string | null> {
+  let tmpPath: string | null = null
+  try {
+    if (att.size > MAX_ATTACHMENT_BYTES) return null
+    const res = await fetch(att.url)
+    const buf = Buffer.from(await res.arrayBuffer())
+    const name = att.name ?? `${att.id}`
+    const rawExt = name.includes('.') ? name.slice(name.lastIndexOf('.') + 1) : 'ogg'
+    const ext = rawExt.replace(/[^a-zA-Z0-9]/g, '') || 'ogg'
+    tmpPath = join(tmpdir(), `discord-voice-${Date.now()}-${att.id}.${ext}`)
+    writeFileSync(tmpPath, buf)
+    const { stdout } = await execFileAsync(TRANSCRIBE_SCRIPT, [tmpPath, 'auto'], {
+      timeout: TRANSCRIBE_TIMEOUT_MS,
+      maxBuffer: 1024 * 1024,
+    })
+    const text = stdout.trim()
+    return text.length > 0 ? text : null
+  } catch (err) {
+    process.stderr.write(`discord channel: transcription failed for ${att.id}: ${err}\n`)
+    return null
+  } finally {
+    if (tmpPath) {
+      try { unlinkSync(tmpPath) } catch {}
+    }
+  }
 }
 
 const mcp = new Server(
@@ -1260,15 +1308,36 @@ async function handleInbound(msg: Message): Promise<void> {
   // Attachments are listed (name/type/size) but not downloaded — the model
   // calls download_attachment when it wants them. Keeps the notification
   // fast and avoids filling inbox/ with images nobody looked at.
+  // Exception: audio attachments are auto-transcribed inline so the model
+  // sees the spoken content as text without an extra round-trip.
   const atts: string[] = []
+  const transcripts: { name: string; text: string; durationSec: number | null }[] = []
   for (const att of msg.attachments.values()) {
     const kb = (att.size / 1024).toFixed(0)
     atts.push(`${safeAttName(att)} (${att.contentType ?? 'unknown'}, ${kb}KB)`)
+    if (isAudioAttachment(att)) {
+      const text = await transcribeAudio(att)
+      if (text) {
+        transcripts.push({
+          name: safeAttName(att),
+          text,
+          durationSec: typeof att.duration === 'number' ? att.duration : null,
+        })
+      }
+    }
   }
 
   // Attachment listing goes in meta only — an in-content annotation is
   // forgeable by any allowlisted sender typing that string.
-  const content = msg.content || (atts.length > 0 ? '(attachment)' : '')
+  // Transcripts ARE put in content because the model needs to read them; we
+  // wrap each one in a clearly-labeled untrusted block so the model treats
+  // the text as quoted user content (already true for everything in <channel>).
+  const transcriptBlocks = transcripts.map(t => {
+    const dur = t.durationSec != null ? ` ${Math.round(t.durationSec)}s` : ''
+    return `[🎤 voice${dur} — auto-transcribed via mlx-whisper]\n${t.text}`
+  })
+  const baseContent = msg.content || (atts.length > 0 && transcripts.length === 0 ? '(attachment)' : '')
+  const content = [baseContent, ...transcriptBlocks].filter(s => s.length > 0).join('\n\n')
 
   mcp.notification({
     method: 'notifications/claude/channel',
@@ -1281,6 +1350,7 @@ async function handleInbound(msg: Message): Promise<void> {
         user_id: msg.author.id,
         ts: msg.createdAt.toISOString(),
         ...(atts.length > 0 ? { attachment_count: String(atts.length), attachments: atts.join('; ') } : {}),
+        ...(transcripts.length > 0 ? { auto_transcribed: String(transcripts.length) } : {}),
       },
     },
   }).catch(err => {
