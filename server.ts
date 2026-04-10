@@ -373,6 +373,51 @@ function noteSent(id: string): void {
   }
 }
 
+// ── Typing indicator manager ─────────────────────────────────────────
+// Discord's sendTyping() lasts ~10s. For Claude responses that take longer,
+// refresh it on an interval until reply() is called or a max duration elapses
+// (safety net if Claude crashes or never calls reply).
+
+const TYPING_REFRESH_MS = 7000
+const TYPING_MAX_MS = 5 * 60 * 1000
+
+type TypingEntry = { interval: ReturnType<typeof setInterval>; deadline: number }
+const typingLoops = new Map<string, TypingEntry>()
+
+function startTypingLoop(channel: Message['channel']): void {
+  if (!('sendTyping' in channel)) return
+  const id = channel.id
+
+  // Idempotent: if already running, just extend the deadline so a second
+  // message from the same user doesn't stack intervals.
+  const existing = typingLoops.get(id)
+  if (existing) {
+    existing.deadline = Date.now() + TYPING_MAX_MS
+    void channel.sendTyping().catch(() => {})
+    return
+  }
+
+  void channel.sendTyping().catch(() => {})
+  const interval = setInterval(() => {
+    const entry = typingLoops.get(id)
+    if (!entry) return
+    if (Date.now() > entry.deadline) {
+      stopTypingLoop(id)
+      return
+    }
+    void channel.sendTyping().catch(() => {})
+  }, TYPING_REFRESH_MS)
+
+  typingLoops.set(id, { interval, deadline: Date.now() + TYPING_MAX_MS })
+}
+
+function stopTypingLoop(channelId: string): void {
+  const entry = typingLoops.get(channelId)
+  if (!entry) return
+  clearInterval(entry.interval)
+  typingLoops.delete(channelId)
+}
+
 async function gate(msg: Message): Promise<GateResult> {
   const access = loadAccess()
   const pruned = pruneExpired(access)
@@ -824,6 +869,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
           throw new Error(`reply failed after ${sentIds.length} of ${chunks.length} chunk(s) sent: ${msg}`)
         }
 
+        stopTypingLoop(chat_id)
+
         const result =
           sentIds.length === 1
             ? `sent (id: ${sentIds[0]})`
@@ -1133,10 +1180,9 @@ async function handleInbound(msg: Message): Promise<void> {
     return
   }
 
-  // Typing indicator — signals "processing" until we reply (or ~10s elapses).
-  if ('sendTyping' in msg.channel) {
-    void msg.channel.sendTyping().catch(() => {})
-  }
+  // Typing indicator — refreshed on an interval until reply() is called or
+  // TYPING_MAX_MS elapses. Signals "processing" for the whole Claude turn.
+  startTypingLoop(msg.channel)
 
   // Ack reaction — lets the user know we're processing. Fire-and-forget.
   const access = result.access
