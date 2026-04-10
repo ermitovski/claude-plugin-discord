@@ -1,2 +1,22 @@
+# Dependencies
 node_modules/
+
+# OS
 .DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# Safety net — el plugin lee estos de ~/.claude/channels/discord/ por defecto,
+# pero si alguien cambia DISCORD_STATE_DIR a "." evitamos leak
+.env
+access.json
+commands.json
+approved/
+inbox/
+
+# Logs
+*.log
