@@ -1,0 +1,31 @@
+claude-plugin-discord
+======================
+
+This product is a modified derivative work based on the Discord plugin
+from the "claude-plugins-official" project by Anthropic:
+
+    https://github.com/anthropics/claude-plugins-official
+
+The upstream project is licensed under the Apache License, Version 2.0.
+A copy of the license is included in this repository as LICENSE.
+
+Modifications in this fork (on top of upstream v0.0.4):
+
+  1. Patch for issue #1091 — fix DM recipientId corruption after
+     permission prompts.
+     https://github.com/anthropics/claude-plugins-official/issues/1091
+
+  2. Slash command support — adds registration and handling of Discord
+     application (slash) commands via a commands.json config file.
+
+  3. Additional tools and ergonomics (status_message, typing indicator
+     adjustments, auto-transcription of inbound audio attachments, etc.).
+
+This repository is NOT affiliated with, endorsed by, or supported by
+Anthropic. For the official, supported plugin use:
+
+    claude plugin install discord
+
+"Claude", "Claude Code" and related marks are trademarks of Anthropic,
+PBC. Use of those names in this repository is purely descriptive to
+identify the upstream project and does not imply any endorsement.
