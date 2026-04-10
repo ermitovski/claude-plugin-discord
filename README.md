@@ -121,6 +121,22 @@ El plugin lee su estado de `~/.claude/channels/discord/` por defecto (override c
 
 Ver el skill `/discord:configure` dentro del propio plugin para guiar el setup.
 
+### ⚠️ Sólo una sesión de Claude debe cargar el plugin
+
+Si dos procesos de `claude` cargan este plugin simultáneamente, ambos abren un gateway de Discord con el mismo bot token. Cada slash command llega a las dos sesiones, las dos llaman `deferReply()`, una gana el ack y la otra falla — y `interaction_respond` revienta luego con `The reply to this interaction has not been sent or deferred`.
+
+Para evitarlo: **desactiva el plugin globalmente** en `~/.claude/settings.json` y déjalo cargado sólo en la sesión que lo necesita (típicamente un wrapper que arranca con `claude --channels plugin:discord@claude-plugins-official`):
+
+```json
+{
+  "enabledPlugins": {
+    "discord@claude-plugins-official": false
+  }
+}
+```
+
+Desde la PR #6 el plugin loguea a stderr cuando `deferReply` falla, así que si vuelves a ver el síntoma busca `discord: deferReply failed` en los logs — casi seguro hay un segundo proceso cargando el plugin.
+
 ## Restaurar tras `claude plugin update discord`
 
 Si en el futuro actualizas el plugin y quieres volver a aplicar este snapshot:
