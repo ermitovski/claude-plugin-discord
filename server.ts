@@ -760,6 +760,70 @@ function parseColor(c: string | number | undefined): number | undefined {
   return Number.isFinite(n) ? n : undefined
 }
 
+// Build a Discord EmbedBuilder from a loose spec object. Used by both
+// send_embed (channel messages) and interaction_respond (slash command
+// replies) so the two stay in sync.
+type EmbedSpec = {
+  title?: string
+  description?: string
+  url?: string
+  color?: string | number
+  footer?: string
+  thumbnail_url?: string
+  image_url?: string
+  author?: string
+  timestamp?: string
+  fields?: { name: string; value: string; inline?: boolean }[]
+}
+
+function buildEmbedFromSpec(spec: EmbedSpec): EmbedBuilder {
+  const embed = new EmbedBuilder()
+  if (spec.title) embed.setTitle(spec.title)
+  if (spec.description) embed.setDescription(spec.description)
+  if (spec.url) embed.setURL(spec.url)
+  const color = parseColor(spec.color)
+  if (color != null) embed.setColor(color)
+  if (spec.footer) embed.setFooter({ text: spec.footer })
+  if (spec.thumbnail_url) embed.setThumbnail(spec.thumbnail_url)
+  if (spec.image_url) embed.setImage(spec.image_url)
+  if (spec.author) embed.setAuthor({ name: spec.author })
+  if (spec.timestamp) embed.setTimestamp(spec.timestamp === 'now' ? new Date() : new Date(spec.timestamp))
+  if (spec.fields && spec.fields.length > 0) {
+    embed.addFields(spec.fields.map(f => ({ name: f.name, value: f.value, inline: f.inline ?? false })))
+  }
+  return embed
+}
+
+// JSONSchema fragment for embed spec — reused by send_embed and interaction_respond.
+const EMBED_SPEC_SCHEMA = {
+  type: 'object',
+  description: 'Rich embed spec. See send_embed for field semantics.',
+  properties: {
+    title: { type: 'string', description: 'Embed title (max 256 chars).' },
+    description: { type: 'string', description: 'Main embed body (max 4096 chars). Supports Discord markdown.' },
+    color: { type: 'string', description: 'Hex (#5865f2, 0x5865f2), decimal int as string, or named (red/green/blue/yellow/orange/purple/grey).' },
+    url: { type: 'string', description: 'URL the title links to.' },
+    fields: {
+      type: 'array',
+      description: 'Up to 25 fields. Each field has name (max 256), value (max 1024), and optional inline bool.',
+      items: {
+        type: 'object',
+        properties: {
+          name: { type: 'string' },
+          value: { type: 'string' },
+          inline: { type: 'boolean' },
+        },
+        required: ['name', 'value'],
+      },
+    },
+    footer: { type: 'string', description: 'Footer text (max 2048 chars).' },
+    thumbnail_url: { type: 'string', description: 'Small image shown top-right of the embed.' },
+    image_url: { type: 'string', description: 'Large image shown below the fields.' },
+    author: { type: 'string', description: 'Author/byline shown above the title.' },
+    timestamp: { type: 'string', description: 'ISO timestamp shown in footer area. Pass "now" for current time.' },
+  },
+}
+
 // Receive permission_request from CC → format → send to all allowlisted DMs.
 // Groups are intentionally excluded — the security thread resolution was
 // "single-user mode for official plugins." Anyone in access.allowFrom
@@ -906,12 +970,13 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'interaction_respond',
       description:
-        'Respond to a deferred Discord slash command interaction. Use after receiving a slash_command notification. The interaction_id comes from the notification meta.',
+        'Respond to a deferred Discord slash command interaction. Use after receiving a slash_command notification. The interaction_id comes from the notification meta. Pass `embed` to render a rich embed instead of (or in addition to) the plain text — text becomes optional when an embed is provided.',
       inputSchema: {
         type: 'object',
         properties: {
           interaction_id: { type: 'string', description: 'The interaction ID from the slash command notification meta.' },
-          text: { type: 'string', description: 'Response text (max 2000 chars per chunk, auto-split).' },
+          text: { type: 'string', description: 'Response text (max 2000 chars per chunk, auto-split). Optional when `embed` is set.' },
+          embed: EMBED_SPEC_SCHEMA,
           files: {
             type: 'array',
             items: { type: 'string' },
@@ -919,7 +984,7 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
           ephemeral: { type: 'boolean', description: 'If true, only the command invoker sees the response. Only works on the first response.' },
         },
-        required: ['interaction_id', 'text'],
+        required: ['interaction_id'],
       },
     },
     {
@@ -1168,9 +1233,14 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       }
       case 'interaction_respond': {
         const interaction_id = args.interaction_id as string
-        const text = args.text as string
+        const text = (args.text as string | undefined) ?? ''
+        const embedSpec = args.embed as EmbedSpec | undefined
         const files = (args.files as string[] | undefined) ?? []
         const ephemeral = (args.ephemeral as boolean | undefined) ?? false
+
+        if (!text && !embedSpec) {
+          throw new Error('interaction_respond requires either `text` or `embed` (or both)')
+        }
 
         const interaction = pendingInteractions.get(interaction_id)
         if (!interaction) {
@@ -1185,14 +1255,19 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
           }
         }
 
+        const embed = embedSpec ? buildEmbedFromSpec(embedSpec) : undefined
+
+        // If there's a long text payload it still needs chunking; embeds
+        // always ride on the first (deferred) response.
         const access = loadAccess()
         const limit = Math.max(1, Math.min(access.textChunkLimit ?? MAX_CHUNK_LIMIT, MAX_CHUNK_LIMIT))
         const mode = access.chunkMode ?? 'length'
-        const chunks = chunk(text, limit, mode)
+        const chunks = text ? chunk(text, limit, mode) : ['']
 
         // First chunk goes as editReply (the deferred response)
         await interaction.editReply({
-          content: chunks[0],
+          ...(chunks[0] ? { content: chunks[0] } : {}),
+          ...(embed ? { embeds: [embed] } : {}),
           ...(files.length > 0 ? { files } : {}),
         })
 
@@ -1203,7 +1278,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
 
         pendingInteractions.delete(interaction_id)
         return {
-          content: [{ type: 'text', text: `responded to /${interaction.commandName} (${chunks.length} chunk(s))` }],
+          content: [{ type: 'text', text: `responded to /${interaction.commandName} (${chunks.length} chunk(s)${embed ? ' + embed' : ''})` }],
         }
       }
       case 'register_commands': {
@@ -1219,32 +1294,20 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         const ch = await fetchAllowedChannel(chat_id)
         if (!('send' in ch)) throw new Error('channel is not sendable')
 
-        const embed = new EmbedBuilder()
-        const title = args.title as string | undefined
-        const description = args.description as string | undefined
-        const url = args.url as string | undefined
-        const footer = args.footer as string | undefined
-        const thumbnail_url = args.thumbnail_url as string | undefined
-        const image_url = args.image_url as string | undefined
-        const author = args.author as string | undefined
-        const timestamp = args.timestamp as string | undefined
-        const fields = args.fields as { name: string; value: string; inline?: boolean }[] | undefined
-        const color = parseColor(args.color as string | number | undefined)
         const content = args.content as string | undefined
         const files = (args.files as string[] | undefined) ?? []
-
-        if (title) embed.setTitle(title)
-        if (description) embed.setDescription(description)
-        if (url) embed.setURL(url)
-        if (color != null) embed.setColor(color)
-        if (footer) embed.setFooter({ text: footer })
-        if (thumbnail_url) embed.setThumbnail(thumbnail_url)
-        if (image_url) embed.setImage(image_url)
-        if (author) embed.setAuthor({ name: author })
-        if (timestamp) embed.setTimestamp(timestamp === 'now' ? new Date() : new Date(timestamp))
-        if (fields && fields.length > 0) {
-          embed.addFields(fields.map(f => ({ name: f.name, value: f.value, inline: f.inline ?? false })))
-        }
+        const embed = buildEmbedFromSpec({
+          title: args.title as string | undefined,
+          description: args.description as string | undefined,
+          url: args.url as string | undefined,
+          color: args.color as string | number | undefined,
+          footer: args.footer as string | undefined,
+          thumbnail_url: args.thumbnail_url as string | undefined,
+          image_url: args.image_url as string | undefined,
+          author: args.author as string | undefined,
+          timestamp: args.timestamp as string | undefined,
+          fields: args.fields as { name: string; value: string; inline?: boolean }[] | undefined,
+        })
 
         for (const f of files) {
           assertSendable(f)
