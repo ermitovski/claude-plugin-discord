@@ -1,6 +1,8 @@
 # claude-plugin-discord
 
-Private mirror del plugin Discord de Claude Code (`anthropics/claude-plugins-official`), con modificaciones locales aplicadas encima de la versión 0.0.4.
+> **⚠️ Unofficial derivative work.** This repository is a **modified snapshot** of the Discord plugin from [`anthropics/claude-plugins-official`](https://github.com/anthropics/claude-plugins-official) (version 0.0.4). It is **not affiliated with, endorsed by, or supported by Anthropic**. Redistributed under the terms of the upstream Apache 2.0 license — see [`LICENSE`](./LICENSE) and [`NOTICE`](./NOTICE). For the official plugin, use `claude plugin install discord`.
+
+Mirror del plugin Discord de Claude Code (`anthropics/claude-plugins-official`), con modificaciones locales aplicadas encima de la versión 0.0.4.
 
 Este repo es un **snapshot** — NO está conectado al upstream. Se usa para:
 
