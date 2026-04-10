@@ -25,6 +25,7 @@ import {
   ButtonBuilder,
   ButtonStyle,
   ActionRowBuilder,
+  EmbedBuilder,
   SlashCommandBuilder,
   REST,
   Routes,
@@ -719,6 +720,46 @@ const mcp = new Server(
 // Stores full permission details for "See more" expansion keyed by request_id.
 const pendingPermissions = new Map<string, { tool_name: string; description: string; input_preview: string }>()
 
+// Blocking send_buttons state: one entry per outstanding prompt, keyed by
+// correlation id. Resolved by the interactionCreate handler when an allowed
+// user clicks a button, or rejected on timeout.
+type PendingButton = {
+  resolve: (r: { value: string; label: string; user_id: string; user_name: string }) => void
+  reject: (err: Error) => void
+  allowedUsers: string[]
+  buttons: { label: string; value: string; style: ButtonStyle }[]
+  timeoutHandle: NodeJS.Timeout
+}
+const pendingButtons = new Map<string, PendingButton>()
+
+const BUTTON_STYLE_MAP: Record<string, ButtonStyle> = {
+  primary: ButtonStyle.Primary,
+  secondary: ButtonStyle.Secondary,
+  success: ButtonStyle.Success,
+  danger: ButtonStyle.Danger,
+}
+
+function parseButtonStyle(s: string | undefined): ButtonStyle {
+  if (!s) return ButtonStyle.Secondary
+  return BUTTON_STYLE_MAP[s.toLowerCase()] ?? ButtonStyle.Secondary
+}
+
+// Accept #RRGGBB, 0xRRGGBB, decimal int, or a handful of named colors.
+function parseColor(c: string | number | undefined): number | undefined {
+  if (c == null) return undefined
+  if (typeof c === 'number') return c
+  const s = c.trim().toLowerCase()
+  const named: Record<string, number> = {
+    red: 0xed4245, green: 0x57f287, blue: 0x5865f2, yellow: 0xfee75c,
+    orange: 0xf39c12, purple: 0xeb459e, grey: 0x99aab5, gray: 0x99aab5,
+    black: 0x000000, white: 0xffffff,
+  }
+  if (named[s] != null) return named[s]
+  const hex = s.startsWith('#') ? s.slice(1) : s.startsWith('0x') ? s.slice(2) : s
+  const n = parseInt(hex, 16)
+  return Number.isFinite(n) ? n : undefined
+}
+
 // Receive permission_request from CC → format → send to all allowlisted DMs.
 // Groups are intentionally excluded — the security thread resolution was
 // "single-user mode for official plugins." Anyone in access.allowFrom
@@ -888,6 +929,82 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
       inputSchema: {
         type: 'object',
         properties: {},
+      },
+    },
+    {
+      name: 'send_embed',
+      description:
+        'Send a rich Discord embed. Good for structured reports (daily summary, solar status, finance, crypto) — renders better than plain text on mobile. Supports title, description (max 4096 chars), color, fields, footer, thumbnail, image, url. Optionally pass `content` for plain text alongside the embed, and `files` for attachments.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          chat_id: { type: 'string' },
+          title: { type: 'string', description: 'Embed title (max 256 chars).' },
+          description: { type: 'string', description: 'Main embed body (max 4096 chars). Supports Discord markdown.' },
+          color: { type: 'string', description: 'Hex (#5865f2, 0x5865f2), decimal int as string, or named (red/green/blue/yellow/orange/purple/grey).' },
+          url: { type: 'string', description: 'URL the title links to.' },
+          fields: {
+            type: 'array',
+            description: 'Up to 25 fields. Each field has name (max 256), value (max 1024), and optional inline bool.',
+            items: {
+              type: 'object',
+              properties: {
+                name: { type: 'string' },
+                value: { type: 'string' },
+                inline: { type: 'boolean' },
+              },
+              required: ['name', 'value'],
+            },
+          },
+          footer: { type: 'string', description: 'Footer text (max 2048 chars).' },
+          thumbnail_url: { type: 'string', description: 'Small image shown top-right of the embed.' },
+          image_url: { type: 'string', description: 'Large image shown below the fields.' },
+          author: { type: 'string', description: 'Author/byline shown above the title.' },
+          timestamp: { type: 'string', description: 'ISO timestamp shown in footer area. Pass "now" for current time.' },
+          content: { type: 'string', description: 'Optional plain text to send alongside the embed (max 2000 chars).' },
+          files: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Absolute file paths to attach (images, logs). Max 10 files, 25MB each.',
+          },
+        },
+        required: ['chat_id'],
+      },
+    },
+    {
+      name: 'send_buttons',
+      description:
+        'Send a message with clickable buttons and BLOCK until one is clicked (or timeout). Use this for remote approvals of risky actions (backups, restart services, deploys): the user taps a button on their phone instead of typing a reply. Returns the clicked button value, label, and user info. On timeout the tool errors — callers should treat that as "no decision, do not proceed". Buttons are limited to 5 per row; up to 25 total (5 rows). By default only users in the access allowlist can click; pass allowed_users to narrow further.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          chat_id: { type: 'string' },
+          text: { type: 'string', description: 'Message text shown above the buttons.' },
+          buttons: {
+            type: 'array',
+            description: 'Up to 25 buttons. Each button has a label (what the user sees, max 80 chars), a value (what the tool returns when clicked), and an optional style (primary/secondary/success/danger, default secondary).',
+            items: {
+              type: 'object',
+              properties: {
+                label: { type: 'string' },
+                value: { type: 'string' },
+                style: { type: 'string', enum: ['primary', 'secondary', 'success', 'danger'] },
+                emoji: { type: 'string', description: 'Optional unicode emoji to prefix the label.' },
+              },
+              required: ['label', 'value'],
+            },
+          },
+          timeout_s: {
+            type: 'number',
+            description: 'Seconds to wait for a click. Default 300 (5 min), max 840 (14 min — Discord interaction limit).',
+          },
+          allowed_users: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Discord user IDs allowed to click. Defaults to the full access allowlist if omitted.',
+          },
+        },
+        required: ['chat_id', 'text', 'buttons'],
       },
     },
   ],
@@ -1097,6 +1214,146 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
           content: [{ type: 'text', text: `registered ${result.registered} command(s) in ${result.guilds.length} guild(s): ${result.guilds.join(', ') || 'none'}` }],
         }
       }
+      case 'send_embed': {
+        const chat_id = args.chat_id as string
+        const ch = await fetchAllowedChannel(chat_id)
+        if (!('send' in ch)) throw new Error('channel is not sendable')
+
+        const embed = new EmbedBuilder()
+        const title = args.title as string | undefined
+        const description = args.description as string | undefined
+        const url = args.url as string | undefined
+        const footer = args.footer as string | undefined
+        const thumbnail_url = args.thumbnail_url as string | undefined
+        const image_url = args.image_url as string | undefined
+        const author = args.author as string | undefined
+        const timestamp = args.timestamp as string | undefined
+        const fields = args.fields as { name: string; value: string; inline?: boolean }[] | undefined
+        const color = parseColor(args.color as string | number | undefined)
+        const content = args.content as string | undefined
+        const files = (args.files as string[] | undefined) ?? []
+
+        if (title) embed.setTitle(title)
+        if (description) embed.setDescription(description)
+        if (url) embed.setURL(url)
+        if (color != null) embed.setColor(color)
+        if (footer) embed.setFooter({ text: footer })
+        if (thumbnail_url) embed.setThumbnail(thumbnail_url)
+        if (image_url) embed.setImage(image_url)
+        if (author) embed.setAuthor({ name: author })
+        if (timestamp) embed.setTimestamp(timestamp === 'now' ? new Date() : new Date(timestamp))
+        if (fields && fields.length > 0) {
+          embed.addFields(fields.map(f => ({ name: f.name, value: f.value, inline: f.inline ?? false })))
+        }
+
+        for (const f of files) {
+          assertSendable(f)
+          const st = statSync(f)
+          if (st.size > MAX_ATTACHMENT_BYTES) {
+            throw new Error(`file too large: ${f} (${(st.size / 1024 / 1024).toFixed(1)}MB, max 25MB)`)
+          }
+        }
+        if (files.length > 10) throw new Error('Discord allows max 10 attachments per message')
+
+        if (content && content.length > 2000) {
+          throw new Error(`content exceeds 2000 chars (${content.length}) — trim or move into description`)
+        }
+
+        const sent = await ch.send({
+          ...(content ? { content } : {}),
+          embeds: [embed],
+          ...(files.length > 0 ? { files } : {}),
+        })
+        noteSent(sent.id)
+        stopTypingLoop(chat_id)
+        statusMessages.delete(chat_id)
+        return { content: [{ type: 'text', text: `embed sent (id: ${sent.id})` }] }
+      }
+      case 'send_buttons': {
+        const chat_id = args.chat_id as string
+        const text = args.text as string
+        const buttonsIn = args.buttons as { label: string; value: string; style?: string; emoji?: string }[]
+        const timeout_s = Math.min(Math.max((args.timeout_s as number) ?? 300, 1), 840)
+        const allowed_users_arg = args.allowed_users as string[] | undefined
+
+        if (!Array.isArray(buttonsIn) || buttonsIn.length === 0) {
+          throw new Error('buttons must be a non-empty array')
+        }
+        if (buttonsIn.length > 25) {
+          throw new Error('max 25 buttons (5 rows of 5)')
+        }
+        for (const b of buttonsIn) {
+          if (!b.label || !b.value) throw new Error('each button needs label and value')
+          if (b.label.length > 80) throw new Error(`button label too long (max 80 chars): ${b.label.slice(0, 20)}...`)
+        }
+
+        const ch = await fetchAllowedChannel(chat_id)
+        if (!('send' in ch)) throw new Error('channel is not sendable')
+
+        const access = loadAccess()
+        const allowedUsers = allowed_users_arg && allowed_users_arg.length > 0
+          ? allowed_users_arg.filter(u => access.allowFrom.includes(u))
+          : [...access.allowFrom]
+        if (allowedUsers.length === 0) {
+          throw new Error('no allowed users — allowed_users must intersect the access allowlist')
+        }
+
+        // 5-char correlation id, same charset as permission requests.
+        const corr = randomBytes(4).toString('base64').replace(/[^a-km-z]/gi, '').toLowerCase().slice(0, 5).padEnd(5, 'x')
+
+        const rows: ActionRowBuilder<ButtonBuilder>[] = []
+        for (let i = 0; i < buttonsIn.length; i += 5) {
+          const slice = buttonsIn.slice(i, i + 5)
+          const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+            ...slice.map((b, j) => {
+              const idx = i + j
+              const btn = new ButtonBuilder()
+                .setCustomId(`btn:${corr}:${idx}`)
+                .setLabel(b.label)
+                .setStyle(parseButtonStyle(b.style))
+              if (b.emoji) btn.setEmoji(b.emoji)
+              return btn
+            }),
+          )
+          rows.push(row)
+        }
+
+        const sent = await ch.send({ content: text, components: rows })
+        noteSent(sent.id)
+
+        const normalizedButtons = buttonsIn.map(b => ({
+          label: b.label,
+          value: b.value,
+          style: parseButtonStyle(b.style),
+        }))
+
+        try {
+          const result = await new Promise<{ value: string; label: string; user_id: string; user_name: string }>((resolve, reject) => {
+            const timeoutHandle = setTimeout(() => {
+              pendingButtons.delete(corr)
+              // Disable buttons on timeout so the chat reflects reality.
+              const disabledRows = rows.map(row => {
+                const newRow = new ActionRowBuilder<ButtonBuilder>()
+                newRow.addComponents(row.components.map(c => ButtonBuilder.from(c).setDisabled(true)))
+                return newRow
+              })
+              sent.edit({ content: `${text}\n\n⏱️ Timed out after ${timeout_s}s`, components: disabledRows }).catch(() => {})
+              reject(new Error(`timed out after ${timeout_s}s — no button clicked`))
+            }, timeout_s * 1000)
+            pendingButtons.set(corr, { resolve, reject, allowedUsers, buttons: normalizedButtons, timeoutHandle })
+          })
+
+          stopTypingLoop(chat_id)
+          return {
+            content: [{
+              type: 'text',
+              text: `clicked: ${result.value} (label: "${result.label}") by ${result.user_name} (${result.user_id})`,
+            }],
+          }
+        } catch (err) {
+          throw err
+        }
+      }
       default:
         return {
           content: [{ type: 'text', text: `unknown tool: ${req.params.name}` }],
@@ -1199,6 +1456,65 @@ client.on('interactionCreate', async (interaction: Interaction) => {
       process.stderr.write(`discord: failed to deliver slash command to Claude: ${err}\n`)
     })
     return
+  }
+
+  // ── Button handler (send_buttons) ──────────────────────────────────
+  if (interaction.isButton()) {
+    const btnMatch = /^btn:([a-km-z]{5}):(\d+)$/.exec(interaction.customId)
+    if (btnMatch) {
+      const [, corr, idxStr] = btnMatch
+      const pending = pendingButtons.get(corr)
+      if (!pending) {
+        await interaction.reply({ content: 'This prompt has expired.', ephemeral: true }).catch(() => {})
+        return
+      }
+      if (!pending.allowedUsers.includes(interaction.user.id)) {
+        await interaction.reply({ content: 'Not authorized to answer this prompt.', ephemeral: true }).catch(() => {})
+        return
+      }
+      const idx = parseInt(idxStr, 10)
+      const clicked = pending.buttons[idx]
+      if (!clicked) {
+        await interaction.reply({ content: 'Unknown button.', ephemeral: true }).catch(() => {})
+        return
+      }
+      clearTimeout(pending.timeoutHandle)
+      pendingButtons.delete(corr)
+
+      // Rebuild disabled rows from the known pending state so we don't have
+      // to re-parse the message components (which can be container types
+      // besides plain ActionRow after discord.js v14 widening).
+      const originalContent = interaction.message.content
+      const disabledRows: ActionRowBuilder<ButtonBuilder>[] = []
+      for (let i = 0; i < pending.buttons.length; i += 5) {
+        const slice = pending.buttons.slice(i, i + 5)
+        disabledRows.push(
+          new ActionRowBuilder<ButtonBuilder>().addComponents(
+            ...slice.map((b, j) =>
+              new ButtonBuilder()
+                .setCustomId(`btn:${corr}:${i + j}`)
+                .setLabel(b.label)
+                .setStyle(b.style)
+                .setDisabled(true),
+            ),
+          ),
+        )
+      }
+      await interaction
+        .update({
+          content: `${originalContent}\n\n✓ ${interaction.user.username} clicked **${clicked.label}**`,
+          components: disabledRows,
+        })
+        .catch(() => {})
+
+      pending.resolve({
+        value: clicked.value,
+        label: clicked.label,
+        user_id: interaction.user.id,
+        user_name: interaction.user.username,
+      })
+      return
+    }
   }
 
   // ── Button handler (permissions) ───────────────────────────────────
