@@ -1478,8 +1478,16 @@ client.on('interactionCreate', async (interaction: Interaction) => {
       return
     }
 
-    // Defer — gives us up to 15 minutes to respond
-    await interaction.deferReply().catch(() => {})
+    // Defer — gives us up to 15 minutes to respond. If defer fails (most
+    // commonly because another bot process holding the same token already
+    // acknowledged the interaction), bail out: notifying Claude would only
+    // produce a confusing "not deferred" error from interaction_respond.
+    try {
+      await interaction.deferReply()
+    } catch (err) {
+      process.stderr.write(`discord: deferReply failed for /${interaction.commandName} (${interaction.id}): ${err}. Likely a duplicate bot process holding the same token — only one Claude session should load this plugin.\n`)
+      return
+    }
 
     // Serialize options to key=value string
     const opts = interaction.options.data
