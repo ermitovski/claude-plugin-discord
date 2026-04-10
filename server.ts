@@ -418,6 +418,13 @@ function stopTypingLoop(channelId: string): void {
   typingLoops.delete(channelId)
 }
 
+// ── Sticky status messages ───────────────────────────────────────────
+// One "status message" per channel. First status_message call sends a new
+// message and stores its id; subsequent calls edit it in place. A final
+// reply() clears the sticky so the next cycle starts fresh.
+
+const statusMessages = new Map<string, string>()
+
 async function gate(msg: Message): Promise<GateResult> {
   const access = loadAccess()
   const pruned = pruneExpired(access)
@@ -650,6 +657,8 @@ const mcp = new Server(
       '',
       'reply accepts file paths (files: ["/abs/path.png"]) for attachments. Use react to add emoji reactions, and edit_message for interim progress updates. Edits don\'t trigger push notifications — when a long task completes, send a new reply so the user\'s device pings.',
       '',
+      'For long-running tasks, prefer status_message(chat_id, text) over edit_message — it posts a sticky progress message the first call and edits it in place on subsequent calls, so you don\'t have to track message_ids. The sticky auto-clears when you finally call reply() on the same channel. Use it to show progress like "🔄 Step 2/4: fetching data"; end with reply() for the real answer so the user\'s device pings.',
+      '',
       "fetch_messages pulls real Discord history. Discord's search API isn't available to bots — if the user asks you to find an old message, fetch more history or ask them roughly when it was.",
       '',
       'Slash commands arrive as notifications with interaction_type: "slash_command" in meta. The content looks like "/commandname opt=val". Respond using interaction_respond(interaction_id, text) — NOT reply. The interaction is already deferred (shows "thinking...") and times out after 14 minutes.',
@@ -758,6 +767,23 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
           text: { type: 'string' },
         },
         required: ['chat_id', 'message_id', 'text'],
+      },
+    },
+    {
+      name: 'status_message',
+      description:
+        "Post or update a sticky status/progress message on a channel. First call sends a new message; subsequent calls edit it in place — no need to track message_id. Use for long-running tasks to show progress (e.g. '🔄 Step 2/4: fetching data'). The sticky is auto-cleared when you call reply() on the same channel, so the next cycle starts fresh. Pass clear:true to finalize manually (e.g. end with a '✅ done' and reset).",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          chat_id: { type: 'string' },
+          text: { type: 'string' },
+          clear: {
+            type: 'boolean',
+            description: 'If true, edit with this text and then forget the sticky. Next status_message call on this channel will create a new message.',
+          },
+        },
+        required: ['chat_id', 'text'],
       },
     },
     {
@@ -870,6 +896,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         }
 
         stopTypingLoop(chat_id)
+        statusMessages.delete(chat_id)
 
         const result =
           sentIds.length === 1
@@ -911,6 +938,46 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         const msg = await ch.messages.fetch(args.message_id as string)
         const edited = await msg.edit(args.text as string)
         return { content: [{ type: 'text', text: `edited (id: ${edited.id})` }] }
+      }
+      case 'status_message': {
+        const chat_id = args.chat_id as string
+        const text = args.text as string
+        const clear = (args.clear as boolean | undefined) ?? false
+
+        const ch = await fetchAllowedChannel(chat_id)
+        if (!('send' in ch)) throw new Error('channel is not sendable')
+
+        const existingId = statusMessages.get(chat_id)
+        let resultId: string
+        let mode: 'created' | 'edited'
+
+        if (existingId) {
+          try {
+            const existing = await ch.messages.fetch(existingId)
+            const edited = await existing.edit(text)
+            resultId = edited.id
+            mode = 'edited'
+          } catch {
+            // Existing sticky gone (deleted, too old, etc) — recreate.
+            statusMessages.delete(chat_id)
+            const sent = await ch.send({ content: text })
+            noteSent(sent.id)
+            statusMessages.set(chat_id, sent.id)
+            resultId = sent.id
+            mode = 'created'
+          }
+        } else {
+          const sent = await ch.send({ content: text })
+          noteSent(sent.id)
+          statusMessages.set(chat_id, sent.id)
+          resultId = sent.id
+          mode = 'created'
+        }
+
+        if (clear) statusMessages.delete(chat_id)
+
+        const suffix = clear ? ' (cleared)' : ''
+        return { content: [{ type: 'text', text: `status ${mode} (id: ${resultId})${suffix}` }] }
       }
       case 'download_attachment': {
         const ch = await fetchAllowedChannel(args.chat_id as string)
