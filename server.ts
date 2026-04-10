@@ -976,9 +976,15 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         return { content: [{ type: 'text', text: out }] }
       }
       case 'react': {
-        const ch = await fetchAllowedChannel(args.chat_id as string)
+        const chat_id = args.chat_id as string
+        const ch = await fetchAllowedChannel(chat_id)
         const msg = await ch.messages.fetch(args.message_id as string)
         await msg.react(args.emoji as string)
+        // Emoji-only responses are a terminal reply (e.g. 👍 confirmation),
+        // so stop the typing indicator — otherwise it keeps refreshing until
+        // TYPING_MAX_MS and the user sees a phantom "typing…" after the react.
+        stopTypingLoop(chat_id)
+        statusMessages.delete(chat_id)
         return { content: [{ type: 'text', text: 'reacted' }] }
       }
       case 'edit_message': {
