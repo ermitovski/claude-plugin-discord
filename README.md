@@ -12,12 +12,58 @@ Este repo es un **snapshot** — NO está conectado al upstream. Se usa para:
 
 ## Qué contiene
 
-El snapshot incluye cuatro bloques de cambios sobre el upstream:
+El snapshot incluye cinco bloques de cambios sobre el upstream:
 
 1. **Plugin v0.0.4 base** — tal como se distribuye en `anthropics/claude-plugins-official` (la versión de `plugin.json` marca 0.0.4)
 2. **Patch del issue #1091** — fix de la corrupción de `recipientId` en DMs tras prompts de permiso. Detalles en <https://github.com/anthropics/claude-plugins-official/issues/1091>
 3. **Slash commands añadidos localmente** — soporte completo para registrar y servir slash commands de Discord vía un fichero `commands.json`. Añade imports `SlashCommandBuilder`, `REST`, `Routes`, `ApplicationCommandOptionType` y el bloque "Slash commands config" en `server.ts`
 4. **Tools extra** — `send_embed` (embeds ricos para informes) y `send_buttons` (botones clicables con espera bloqueante, para aprobaciones remotas de acciones destructivas). Ver sección [Tools añadidos](#tools-añadidos).
+5. **Slash commands deterministas (`exec`)** — un comando puede responder ejecutando un script, sin despertar al modelo. Ver sección [Comandos deterministas](#comandos-deterministas-exec).
+
+## Comandos deterministas (`exec`)
+
+Por defecto, cada slash command se le entrega al modelo, que lo interpreta y responde con `interaction_respond`. Eso cuesta un turno de modelo (tokens + latencia) aunque el comando siempre haga exactamente lo mismo.
+
+Un comando en `commands.json` puede llevar `exec`: la ruta **absoluta** de un ejecutable. Si está presente, el plugin lo ejecuta y responde con su salida — sin turno de modelo, sin tokens, a la latencia del script.
+
+```json
+{
+  "name": "crypto",
+  "description": "Bitcoin portfolio - precio actual y holdings",
+  "guild_id": "123...",
+  "exec": "/Users/tu/scripts/crypto.py",
+  "exec_timeout_ms": 15000
+}
+```
+
+**Entrada.** El script recibe cada opción del slash command por partida doble, la que le resulte más cómoda:
+
+| Vía | Forma |
+|-----|-------|
+| argv | `--<opción> <valor>` (compatible con argparse/getopts) |
+| env | `DISCORD_OPT_<OPCIÓN>`, más `DISCORD_COMMAND`, `DISCORD_USER_ID`, `DISCORD_CHANNEL_ID` |
+
+**Salida.** Lo que el script imprima por stdout decide la respuesta:
+
+- Un objeto JSON con `text` y/o `embed` → se renderiza como tal. El `embed` usa el mismo esquema que el tool `send_embed`.
+- Cualquier otra cosa → se publica como texto tal cual (truncado a 2000 caracteres, el límite de Discord).
+
+```sh
+#!/bin/sh
+# Texto plano
+echo "BTC: 95.000€ (+2,3%)"
+
+# ...o un embed
+cat <<'EOF'
+{"embed":{"title":"Bitcoin","color":"orange","fields":[{"name":"Precio","value":"95.000€"}]}}
+EOF
+```
+
+**Degradación.** Cualquier fallo —script inexistente, salida vacía, exit code ≠ 0, timeout, ruta relativa— cae al comportamiento normal: el comando se le entrega al modelo, igual que si no hubiera `exec`. Un script roto nunca se come el comando; como mucho lo hace lento. Los fallos se registran en stderr.
+
+`exec_timeout_ms` por defecto son 15 s, con un tope de 120 s.
+
+**Cuándo usarlo.** Comandos que siempre ejecutan lo mismo y devuelven una respuesta con formato fijo (portfolios, estados, métricas). Lo que necesite interpretar, decidir o redactar, mejor déjalo en el modelo.
 
 ## Tools añadidos
 
@@ -75,6 +121,8 @@ Copiado desde `~/.claude/plugins/cache/claude-plugins-official/discord/0.0.4/` e
 .mcp.json                    # Config del servidor MCP (bun run start)
 package.json                 # Dependencies (discord.js, @modelcontextprotocol/sdk)
 server.ts                    # El código del plugin (con patch #1091 + slash commands)
+exec-command.ts              # Runner de comandos deterministas (`exec`)
+exec-command.test.ts         # Tests del runner (bun test)
 skills/                      # Skills /discord:access y /discord:configure
 ACCESS.md                    # Docs del modelo de control de acceso
 bun.lock                     # Lockfile de Bun
