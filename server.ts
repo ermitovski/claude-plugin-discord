@@ -39,6 +39,7 @@ import { randomBytes } from 'crypto'
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync, statSync, renameSync, realpathSync, chmodSync, existsSync, unlinkSync } from 'fs'
 import { homedir, tmpdir } from 'os'
 import { join, sep, dirname } from 'path'
+import { runExecScript } from './exec-command'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 
@@ -240,6 +241,11 @@ type SlashCommandDef = {
   description: string
   guild_id: string
   options?: CommandOption[]
+  // Deterministic fast path: absolute path to an executable. When set, the
+  // command is answered by running it instead of waking the Claude session.
+  // Any failure falls through to the normal (model-handled) path.
+  exec?: string
+  exec_timeout_ms?: number
 }
 
 type CommandsConfig = {
@@ -351,6 +357,7 @@ async function registerGuildCommands(rest: REST, appId: string): Promise<{ regis
 }
 
 // Pending slash command interactions awaiting Claude's response via interaction_respond.
+const DISCORD_MESSAGE_LIMIT = 2000
 const pendingInteractions = new Map<string, ChatInputCommandInteraction>()
 const INTERACTION_TIMEOUT_MS = 14 * 60 * 1000 // Discord allows 15min, we use 14 for safety
 
@@ -1487,6 +1494,29 @@ client.on('interactionCreate', async (interaction: Interaction) => {
     } catch (err) {
       process.stderr.write(`discord: deferReply failed for /${interaction.commandName} (${interaction.id}): ${err}. Likely a duplicate bot process holding the same token — only one Claude session should load this plugin.\n`)
       return
+    }
+
+    // Deterministic fast path: if this command declares `exec`, run it and
+    // answer directly. Returns null on any problem → fall through to Claude.
+    const def = readCommandsFile().commands.find(c => c.name === interaction.commandName)
+    if (def?.exec) {
+      const reply = await runExecScript(def, {
+        options: interaction.options.data.map(o => ({ name: o.name, value: String(o.value ?? '') })),
+        userId,
+        channelId,
+      })
+      if (reply) {
+        try {
+          await interaction.editReply({
+            ...(reply.text ? { content: reply.text.slice(0, DISCORD_MESSAGE_LIMIT) } : {}),
+            ...(reply.embed ? { embeds: [buildEmbedFromSpec(reply.embed as EmbedSpec)] } : {}),
+          })
+        } catch (err) {
+          // The interaction is already dead — the model can't do better.
+          process.stderr.write(`discord: /${def.name} exec editReply failed: ${err}\n`)
+        }
+        return
+      }
     }
 
     // Serialize options to key=value string
