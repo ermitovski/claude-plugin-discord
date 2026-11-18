@@ -1,8 +1,8 @@
 # claude-plugin-discord
 
-> **⚠️ Unofficial derivative work.** This repository is a **modified snapshot** of the Discord plugin from [`anthropics/claude-plugins-official`](https://github.com/anthropics/claude-plugins-official) (version 0.0.4). It is **not affiliated with, endorsed by, or supported by Anthropic**. Redistributed under the terms of the upstream Apache 2.0 license — see [`LICENSE`](./LICENSE) and [`NOTICE`](./NOTICE). For the official plugin, use `claude plugin install discord`.
+> **⚠️ Unofficial derivative work.** This repository is a **modified snapshot** of the Discord plugin from [`anthropics/claude-plugins-official`](https://github.com/anthropics/claude-plugins-official) (version 0.0.5). It is **not affiliated with, endorsed by, or supported by Anthropic**. Redistributed under the terms of the upstream Apache 2.0 license — see [`LICENSE`](./LICENSE) and [`NOTICE`](./NOTICE). For the official plugin, use `claude plugin install discord`.
 
-Mirror del plugin Discord de Claude Code (`anthropics/claude-plugins-official`), con modificaciones locales aplicadas encima de la versión 0.0.4.
+Mirror del plugin Discord de Claude Code (`anthropics/claude-plugins-official`), con modificaciones locales aplicadas encima de la versión 0.0.5.
 
 Este repo es un **snapshot** — NO está conectado al upstream. Se usa para:
 
@@ -14,7 +14,7 @@ Este repo es un **snapshot** — NO está conectado al upstream. Se usa para:
 
 El snapshot incluye cinco bloques de cambios sobre el upstream:
 
-1. **Plugin v0.0.4 base** — tal como se distribuye en `anthropics/claude-plugins-official` (la versión de `plugin.json` marca 0.0.4)
+1. **Plugin v0.0.5 base** — tal como se distribuye en `anthropics/claude-plugins-official` (la versión de `plugin.json` marca 0.0.5). La 0.0.5 añade el tool `create_thread` y el fix #1365 de `recipientId`; este último no se porta porque el patch #1091 de abajo ya lo cubre y además descarta el caso en que `recipientId` es el ID del propio bot
 2. **Patch del issue #1091** — fix de la corrupción de `recipientId` en DMs tras prompts de permiso. Detalles en <https://github.com/anthropics/claude-plugins-official/issues/1091>
 3. **Slash commands añadidos localmente** — soporte completo para registrar y servir slash commands de Discord vía un fichero `commands.json`. Añade imports `SlashCommandBuilder`, `REST`, `Routes`, `ApplicationCommandOptionType` y el bloque "Slash commands config" en `server.ts`
 4. **Tools extra** — `send_embed` (embeds ricos para informes) y `send_buttons` (botones clicables con espera bloqueante, para aprobaciones remotas de acciones destructivas). Ver sección [Tools añadidos](#tools-añadidos).
@@ -67,7 +67,7 @@ EOF
 
 ## Tools añadidos
 
-Encima de los tools del upstream (`reply`, `react`, `edit_message`, `status_message`, `fetch_messages`, `download_attachment`, `interaction_respond`, `register_commands`) este fork añade:
+Encima de los tools del upstream (`reply`, `react`, `edit_message`, `status_message`, `fetch_messages`, `download_attachment`, `create_thread`, `interaction_respond`, `register_commands`) este fork añade:
 
 ### `send_embed`
 
@@ -112,7 +112,7 @@ const r = await send_buttons({
 
 ## Origen
 
-Copiado desde `~/.claude/plugins/cache/claude-plugins-official/discord/0.0.4/` el 2026-04-10.
+Copiado desde `~/.claude/plugins/cache/claude-plugins-official/discord/0.0.4/` el 2026-04-10. Rebasado sobre upstream 0.0.5 (commit `41448d41`) el 2026-11-18.
 
 ## Estructura
 
@@ -135,13 +135,13 @@ bun.lock                     # Lockfile de Bun
 Sobreescribe el directorio cacheado de Claude Code con el contenido de este repo. Útil después de un `claude plugin update discord` que haya revertido los parches.
 
 ```bash
-# Asumiendo que el plugin instalado sigue siendo 0.0.4
+# Directorio que usa Claude Code: installPath en ~/.claude/plugins/installed_plugins.json
+DEST=$(jq -r '.plugins["discord@claude-plugins-official"][0].installPath' ~/.claude/plugins/installed_plugins.json)
 rsync -a --exclude='node_modules' --exclude='.git' \
-  ~/Projects/claude-plugin-discord/ \
-  ~/.claude/plugins/cache/claude-plugins-official/discord/0.0.4/
+  ~/Projects/claude-plugin-discord/ "$DEST/"
 
 # Reinstalar dependencies si node_modules estaba vacío o desactualizado
-cd ~/.claude/plugins/cache/claude-plugins-official/discord/0.0.4/
+cd "$DEST"
 bun install
 ```
 
