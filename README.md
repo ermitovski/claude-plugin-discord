@@ -10,6 +10,30 @@ Este repo es un **snapshot** — NO está conectado al upstream. Se usa para:
 - Experimentar con modificaciones
 - Conservar parches y features propios sin tener que reaplicarlos tras cada `claude plugin update discord`
 
+## Instalación
+
+El repo es también un marketplace (`ermitovski`, en `.claude-plugin/marketplace.json`). Se instala como `discord@ermitovski`, separado de `discord@claude-plugins-official`, para que el autoupdate del marketplace oficial no pise el fork:
+
+```bash
+claude plugin marketplace add ermitovski/claude-plugin-discord
+claude plugin install discord@ermitovski
+```
+
+El plugin se sigue llamando `discord`: los tools (`mcp__plugin_discord_discord__*`), el estado en `~/.claude/channels/discord/` y `/discord:access` son los mismos que con el oficial. No instalar los dos a la vez.
+
+`--channels` solo admite plugins de la allowlist de Anthropic, que casa nombre y marketplace. Para `plugin:discord@ermitovski` hace falta declararlo en managed settings (`/Library/Application Support/ClaudeCode/managed-settings.json` en macOS):
+
+```json
+{
+  "channelsEnabled": true,
+  "allowedChannelPlugins": [{ "plugin": "discord", "marketplace": "ermitovski" }]
+}
+```
+
+`allowedChannelPlugins` sustituye a la allowlist por defecto de Anthropic.
+
+La cache de plugins se versiona por `version` de `.claude-plugin/plugin.json` (`~/.claude/plugins/cache/ermitovski/discord/<version>/`): subirla en cada cambio que deba llegar a las instalaciones.
+
 ## Qué contiene
 
 El snapshot incluye cinco bloques de cambios sobre el upstream:

@@ -1,0 +1,16 @@
+{
+  "name": "ermitovski",
+  "owner": {
+    "name": "ermitovski"
+  },
+  "metadata": {
+    "description": "Plugins de ermitovski. Hoy solo el fork del channel de Discord."
+  },
+  "plugins": [
+    {
+      "name": "discord",
+      "source": "./",
+      "description": "Fork de discord@claude-plugins-official con status_message, send_embed, send_buttons, slash commands y create_thread."
+    }
+  ]
+}
