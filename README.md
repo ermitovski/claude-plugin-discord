@@ -91,7 +91,7 @@ EOF
 
 ## Tools añadidos
 
-Encima de los tools del upstream (`reply`, `react`, `edit_message`, `status_message`, `fetch_messages`, `download_attachment`, `create_thread`, `interaction_respond`, `register_commands`) este fork añade:
+Encima de los tools del upstream (`reply`, `react`, `list_emojis`, `edit_message`, `status_message`, `fetch_messages`, `download_attachment`, `create_thread`, `interaction_respond`, `register_commands`) este fork añade:
 
 ### `send_embed`
 
