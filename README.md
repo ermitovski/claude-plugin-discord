@@ -38,7 +38,7 @@ La cache de plugins se versiona por `version` de `.claude-plugin/plugin.json` (`
 
 El snapshot incluye cinco bloques de cambios sobre el upstream:
 
-1. **Plugin v0.0.6 base** — tal como se distribuye en `anthropics/claude-plugins-official` (la versión de `plugin.json` marca 0.0.6). La 0.0.6 añade el tool `list_emojis`; la 0.0.5,  el tool `create_thread` y el fix #1365 de `recipientId`; este último no se porta porque el patch #1091 de abajo ya lo cubre y además descarta el caso en que `recipientId` es el ID del propio bot
+1. **Plugin v0.0.6 base** — tal como se distribuye en `anthropics/claude-plugins-official` (la versión de `plugin.json` marca 0.0.6). La 0.0.6 añade el tool `list_emojis`; la 0.0.5, el tool `create_thread` y el fix #1365 de `recipientId`; este último no se porta porque el patch #1091 de abajo ya lo cubre y además descarta el caso en que `recipientId` es el ID del propio bot
 2. **Patch del issue #1091** — fix de la corrupción de `recipientId` en DMs tras prompts de permiso. Detalles en <https://github.com/anthropics/claude-plugins-official/issues/1091>
 3. **Slash commands añadidos localmente** — soporte completo para registrar y servir slash commands de Discord vía un fichero `commands.json`. Añade imports `SlashCommandBuilder`, `REST`, `Routes`, `ApplicationCommandOptionType` y el bloque "Slash commands config" en `server.ts`
 4. **Tools extra** — `send_embed` (embeds ricos para informes) y `send_buttons` (botones clicables con espera bloqueante, para aprobaciones remotas de acciones destructivas). Ver sección [Tools añadidos](#tools-añadidos).
