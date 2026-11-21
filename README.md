@@ -1,14 +1,14 @@
 # claude-plugin-discord
 
-> **⚠️ Unofficial derivative work.** This repository is a **modified snapshot** of the Discord plugin from [`anthropics/claude-plugins-official`](https://github.com/anthropics/claude-plugins-official) (version 0.0.5). It is **not affiliated with, endorsed by, or supported by Anthropic**. Redistributed under the terms of the upstream Apache 2.0 license — see [`LICENSE`](./LICENSE) and [`NOTICE`](./NOTICE). For the official plugin, use `claude plugin install discord`.
+> **⚠️ Unofficial derivative work.** This repository is a **modified snapshot** of the Discord plugin from [`anthropics/claude-plugins-official`](https://github.com/anthropics/claude-plugins-official) (version 0.0.6). It is **not affiliated with, endorsed by, or supported by Anthropic**. Redistributed under the terms of the upstream Apache 2.0 license — see [`LICENSE`](./LICENSE) and [`NOTICE`](./NOTICE). For the official plugin, use `claude plugin install discord`.
 
-Mirror del plugin Discord de Claude Code (`anthropics/claude-plugins-official`), con modificaciones locales aplicadas encima de la versión 0.0.5.
+Mirror del plugin Discord de Claude Code (`anthropics/claude-plugins-official`), con modificaciones locales aplicadas encima de la versión 0.0.6.
 
 Este repo es un **snapshot** — NO está conectado al upstream. Se usa para:
 
 - Backup privado del plugin instalado localmente
 - Experimentar con modificaciones
-- Conservar parches y features propios sin tener que reaplicarlos tras cada `claude plugin update discord`
+- Conservar parches y features propios: al instalarse desde su propio marketplace (`discord@ermitovski`), el autoupdate del oficial no los pisa
 
 ## Instalación
 
@@ -38,7 +38,7 @@ La cache de plugins se versiona por `version` de `.claude-plugin/plugin.json` (`
 
 El snapshot incluye cinco bloques de cambios sobre el upstream:
 
-1. **Plugin v0.0.5 base** — tal como se distribuye en `anthropics/claude-plugins-official` (la versión de `plugin.json` marca 0.0.5). La 0.0.5 añade el tool `create_thread` y el fix #1365 de `recipientId`; este último no se porta porque el patch #1091 de abajo ya lo cubre y además descarta el caso en que `recipientId` es el ID del propio bot
+1. **Plugin v0.0.6 base** — tal como se distribuye en `anthropics/claude-plugins-official` (la versión de `plugin.json` marca 0.0.6). La 0.0.6 añade el tool `list_emojis`; la 0.0.5,  el tool `create_thread` y el fix #1365 de `recipientId`; este último no se porta porque el patch #1091 de abajo ya lo cubre y además descarta el caso en que `recipientId` es el ID del propio bot
 2. **Patch del issue #1091** — fix de la corrupción de `recipientId` en DMs tras prompts de permiso. Detalles en <https://github.com/anthropics/claude-plugins-official/issues/1091>
 3. **Slash commands añadidos localmente** — soporte completo para registrar y servir slash commands de Discord vía un fichero `commands.json`. Añade imports `SlashCommandBuilder`, `REST`, `Routes`, `ApplicationCommandOptionType` y el bloque "Slash commands config" en `server.ts`
 4. **Tools extra** — `send_embed` (embeds ricos para informes) y `send_buttons` (botones clicables con espera bloqueante, para aprobaciones remotas de acciones destructivas). Ver sección [Tools añadidos](#tools-añadidos).
@@ -136,7 +136,7 @@ const r = await send_buttons({
 
 ## Origen
 
-Copiado desde `~/.claude/plugins/cache/claude-plugins-official/discord/0.0.4/` el 2026-04-10. Rebasado sobre upstream 0.0.5 (commit `41448d41`) el 2026-11-18.
+Copiado desde `~/.claude/plugins/cache/claude-plugins-official/discord/0.0.4/` el 2026-04-10. Rebasado sobre upstream 0.0.5 (commit `41448d41`, #9) y portado a 0.0.6 (#11) el 2026-11-18. Desde #10 el repo es su propio marketplace.
 
 ## Estructura
 
@@ -152,38 +152,7 @@ ACCESS.md                    # Docs del modelo de control de acceso
 bun.lock                     # Lockfile de Bun
 ```
 
-## Instalación
-
-### Opción 1 — Reemplazar el plugin instalado (recomendado)
-
-Sobreescribe el directorio cacheado de Claude Code con el contenido de este repo. Útil después de un `claude plugin update discord` que haya revertido los parches.
-
-```bash
-# Directorio que usa Claude Code: installPath en ~/.claude/plugins/installed_plugins.json
-DEST=$(jq -r '.plugins["discord@claude-plugins-official"][0].installPath' ~/.claude/plugins/installed_plugins.json)
-rsync -a --exclude='node_modules' --exclude='.git' \
-  ~/Projects/claude-plugin-discord/ "$DEST/"
-
-# Reinstalar dependencies si node_modules estaba vacío o desactualizado
-cd "$DEST"
-bun install
-```
-
-Después reinicia Claude Code para que cargue el plugin actualizado.
-
-### Opción 2 — Instalación fresca desde cero
-
-Si no tienes el plugin instalado via `claude plugin install discord`, puedes clonar este repo y apuntar Claude Code a él:
-
-```bash
-git clone https://github.com/ermitovski/claude-plugin-discord.git ~/Projects/claude-plugin-discord
-cd ~/Projects/claude-plugin-discord
-bun install
-```
-
-Luego copia el contenido al cache de plugins (mismo comando que la Opción 1).
-
-### Configurar el bot después de instalar
+## Configurar el bot después de instalar
 
 El plugin lee su estado de `~/.claude/channels/discord/` por defecto (override con `DISCORD_STATE_DIR`). Necesitas:
 
@@ -193,38 +162,38 @@ El plugin lee su estado de `~/.claude/channels/discord/` por defecto (override c
 
 Ver el skill `/discord:configure` dentro del propio plugin para guiar el setup.
 
-### ⚠️ Sólo una sesión de Claude debe cargar el plugin
+## ⚠️ Sólo una sesión de Claude debe cargar el plugin
 
 Si dos procesos de `claude` cargan este plugin simultáneamente, ambos abren un gateway de Discord con el mismo bot token. Cada slash command llega a las dos sesiones, las dos llaman `deferReply()`, una gana el ack y la otra falla — y `interaction_respond` revienta luego con `The reply to this interaction has not been sent or deferred`.
 
-Para evitarlo: **desactiva el plugin globalmente** en `~/.claude/settings.json` y déjalo cargado sólo en la sesión que lo necesita (típicamente un wrapper que arranca con `claude --channels plugin:discord@claude-plugins-official`):
+Para evitarlo: **desactiva el plugin globalmente** en `~/.claude/settings.json` y actívalo sólo en la sesión que lo necesita (típicamente un wrapper):
 
 ```json
 {
   "enabledPlugins": {
-    "discord@claude-plugins-official": false
+    "discord@ermitovski": false
   }
 }
 ```
 
-Desde la PR #6 el plugin loguea a stderr cuando `deferReply` falla, así que si vuelves a ver el síntoma busca `discord: deferReply failed` en los logs — casi seguro hay un segundo proceso cargando el plugin.
-
-## Restaurar tras `claude plugin update discord`
-
-Si en el futuro actualizas el plugin y quieres volver a aplicar este snapshot:
-
 ```bash
-# 1. Localizar la versión nueva instalada
-ls ~/.claude/plugins/cache/claude-plugins-official/discord/
-
-# 2. Copiar este snapshot encima (ajustando la versión destino)
-rsync -a --exclude='node_modules' --exclude='.git' \
-  ~/Projects/claude-plugin-discord/ \
-  ~/.claude/plugins/cache/claude-plugins-official/discord/<NUEVA_VERSION>/
-
-# 3. Reinstall deps y reiniciar Claude Code
-cd ~/.claude/plugins/cache/claude-plugins-official/discord/<NUEVA_VERSION>/
-bun install
+claude --settings '{"enabledPlugins":{"discord@ermitovski":true}}' \
+       --channels plugin:discord@ermitovski
 ```
 
-Ojo: si el plugin upstream ha cambiado cosas incompatibles, hay que mergearlo a mano — este repo NO es un fork con tracking del upstream.
+`--settings` prevalece sobre los user settings.
+
+Desde la PR #6 el plugin loguea a stderr cuando `deferReply` falla, así que si vuelves a ver el síntoma busca `discord: deferReply failed` en los logs — casi seguro hay un segundo proceso cargando el plugin.
+
+## Actualizar
+
+**Un cambio en este repo → las instalaciones.** Sube `version` en `.claude-plugin/plugin.json` en el mismo PR (la cache va por versión: sin subirla, `plugin update` no trae nada). Después, en cada máquina:
+
+```bash
+claude plugin marketplace update ermitovski
+claude plugin update discord@ermitovski
+```
+
+y relanza la sesión que carga el plugin.
+
+**Una versión nueva de upstream.** Este repo no hace tracking del upstream: los cambios se portan a mano en un PR (ejemplos: #9 → 0.0.5, #11 → 0.0.6), subiendo `version` al valor de upstream. Para saber si hay versión nueva, compara con `~/.claude/plugins/marketplaces/claude-plugins-official/external_plugins/discord/.claude-plugin/plugin.json`.
